@@ -38,61 +38,29 @@ class Event:
     def iwfplot(self, data, delta, i, typ, predstart, predend):
         return plot_insitu_icmecat_mag_plasma(data, self.begin, self.end, delta, i, typ, predstart, predend)
     
-    def iwfplotnopred(self, data, delta, i, typ):
-        return plot_insitu_icmecat_mag_plasma_nopred(data, self.begin, self.end, delta, i, typ)
+    def iwfplotnopred(self, data, delta, typ):
+        return plot_insitu_icmecat_mag_plasma_nopred(data, self.begin, self.end, delta, typ)
     
-    def heatplot(self, data, delta, i, typ, prediction, similarities):
-        return heatplot(data, self.begin, self.end, delta, i, typ, prediction, similarities)
+    def plot_similarity(self, data, delta, i, typ, prediction):
+        return plot_similarity(data, self.begin, self.end, delta, i, typ, prediction)
 
     def getValue(self, df, feature):
         '''
         for a given df, return the mean of a given feature during the events
         '''
         return df[feature][self.begin:self.end].mean()
+     
+def clearempties(evtlist, data):
     
-    def plotinspect(self,data,delta,i,typ,spacecraft):
-        return plotinspecter(data, self.begin, self.end, delta, i, typ, spacecraft)
-    
-    
-def plotinspecter(data, start, end, delta, i, typ,spacecraft):
-    
-         
-     sns.set_style('darkgrid')
-     sns.set_context('paper')
+    evtlistnew = []
+
+    for i in evtlist:
+        if len(data[i.begin:i.end]) > 6:
+            evtlistnew.append(i)
+            
+    return evtlistnew
         
-     fig=plt.figure()
-    
-     data = data[start-datetime.timedelta(hours=delta):
-                 end+datetime.timedelta(hours=delta)]
-     
-     #sharex means that zooming in works with all subplots
-     ax1 = plt.subplot(111) 
-
-     ax1.plot_date(data.index, data[typ],'-r',label=typ,linewidth=0.5)
-    
-     #plot vertical lines
-     ax1.plot_date([start,start],[-500,500],'-k',label = 'event',linewidth=1)                      
-     ax1.plot_date([end,end],[-500,500],'-k',linewidth=1) 
-    
-     plt.ylabel(typ)
-     plt.legend(loc=3,ncol=4,fontsize=8)
-     
-     ax1.set_ylim(-np.nanmax(data[typ])-5,np.nanmax(data[typ])+5)   
-    
-     
-     plt.setp(ax1.get_xticklabels(), visible=False)
-
-     plt.title(spacecraft+'ICME'+' data, start: '+start.strftime("%Y-%b-%d %H:%M")+'  end: '+end.strftime("%Y-%b-%d %H:%M"))
-     
-     plt.tight_layout()
-     plt.show()
-
-
-     #plotfile=typ+'ICME'+' data, start: '+start.strftime("%Y-%b-%d %H:%M")+'  end: '+end.strftime("%Y-%b-%d %H:%M")+'.png'
-  
-     #plt.savefig(plotfile)
-     #print('saved as ',plotfile)    
-    
+        
 def overlap(event1, event2):
     '''return the time overlap between two events as a timedelta'''
     delta1 = min(event1.end, event2.end)
@@ -198,20 +166,28 @@ def forceAspect(ax,aspect):
     ax.set_aspect(abs((extent[1]-extent[0])/(extent[3]-extent[2]))/aspect)
 
         
-def heatplot(data, start, end, delta, i, typ, prediction, similarities):
+def plot_similarity(data, start, end, delta, i, typ, prediction):
 
     sns.set_style('darkgrid')
     sns.set_context('paper')
-        
-    fig=plt.figure(figsize=(9,6), dpi=150)
     
-    similarities.index = pds.to_datetime(similarities.index)
+        
+    fig=plt.figure(figsize=(12,6), dpi=150) 
+    
+    plt.title(typ+'ICME'+' data, start: '+start.strftime("%Y-%b-%d %H:%M")+'  end: '+end.strftime("%Y-%b-%d %H:%M"))
+
+    
+    #prediction.index = pds.to_datetime(prediction.index)
+    
 
     data = data[start-datetime.timedelta(hours=delta):
                 end+datetime.timedelta(hours=delta)]
+    
+    prediction = prediction[start-datetime.timedelta(hours=delta):
+                end+datetime.timedelta(hours=delta)]
 
      #sharex means that zooming in works with all subplots
-    ax1 = plt.subplot(311) 
+    ax1 = plt.subplot(211) 
 
     ax1.plot_date(data.index, data['bx'],'-r',label='Bx',linewidth=0.5)
     ax1.plot_date(data.index, data['by'],'-g',label='By',linewidth=0.5)
@@ -232,55 +208,27 @@ def heatplot(data, start, end, delta, i, typ, prediction, similarities):
      
     plt.setp(ax1.get_xticklabels(), visible=False)
 
-    plt.title(typ+' start: '+start.strftime("%Y-%b-%d %H:%M")+'  end: '+end.strftime("%Y-%b-%d %H:%M"))
+    plt.title(typ+'ICME'+' data, start: '+start.strftime("%Y-%b-%d %H:%M")+'  end: '+end.strftime("%Y-%b-%d %H:%M"))
     
-    ax2 = plt.subplot(312) 
-        
-     
-    im = pds.DataFrame(prediction[start-datetime.timedelta(hours=delta):
-                end+datetime.timedelta(hours=delta)])
-    
-    im.index = data.index
-    
-    ax2.imshow(im.T, cmap='cividis')
+    ax2 = plt.subplot(212)
+    ax2.plot_date(prediction.index, prediction['pred'],'-r',label = 'Predicted label',linewidth=0.5)
+    ax2.plot_date(prediction.index, prediction['true'],'-b',label = 'True label',linewidth=0.5)
+    ax2.set_ylim(-0.5,1.5)
     
     plt.setp(ax2.get_xticklabels(), visible=False)
     plt.setp(ax2.get_yticklabels(), visible=False)
-    plt.ylabel('Predicted Similarity')
+    
+    plt.ylabel('Label')
+    plt.legend(loc=3,ncol=4,fontsize=8)
 
-    forceAspect(ax2,aspect=9)
+    #forceAspect(ax2,aspect=9)
     
-
-   
-
-    ax3 = plt.subplot(313) 
-    sim = pds.DataFrame(similarities[start-datetime.timedelta(hours=delta):
-                end+datetime.timedelta(hours=delta)])
-
-    
-    ax3.imshow(sim.T, cmap='cividis')
-    
-    plt.setp(ax3.get_xticklabels(), visible=False)
-    plt.setp(ax3.get_yticklabels(), visible=False)
-    
-    print(type(sim))
-    
-    plt.ylabel('Expected Similarity')
-
-    forceAspect(ax3,aspect=9)
-    
-    ax1.get_shared_y_axes().join(ax2,ax3)
+    ax1.get_shared_y_axes().join(ax1,ax2)
 
     plt.tight_layout()
     plt.show()
-
-
-     #plotfile=typ+'ICME'+' data, start: '+start.strftime("%Y-%b-%d %H:%M")+'  end: '+end.strftime("%Y-%b-%d %H:%M")+'.png'
-  
-     #plt.savefig(plotfile)
-     #print('saved as ',plotfile)
         
-def plot_insitu_icmecat_mag_plasma_nopred(data, start, end, delta, i, typ):
+def plot_insitu_icmecat_mag_plasma_nopred(data, start, end, delta, typ):
     
          
      sns.set_style('darkgrid')
@@ -466,9 +414,3 @@ def plot_insitu_icmecat_mag_plasma(data, start, end, delta, i, typ, predstart, p
      
      plt.tight_layout()
      plt.show()
-
-
-     #plotfile=typ+'ICME'+' data, start: '+start.strftime("%Y-%b-%d %H:%M")+'  end: '+end.strftime("%Y-%b-%d %H:%M")+'.png'
-  
-     #plt.savefig(plotfile)
-     #print('saved as ',plotfile)

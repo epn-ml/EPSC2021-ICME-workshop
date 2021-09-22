@@ -8,108 +8,72 @@ from scipy.signal import find_peaks, peak_widths
 from joblib import Parallel, delayed
 from lmfit import models
 import numpy.random as random
+from tqdm import tqdm
+from data_generator import *
+import pickle
 
-def _turn_intervals_to_Event(event, serie):
-    '''
-    Find events in a temporal interval that contain one or several events
-    '''
-    spec = {
-     'time': np.arange(0, len(serie[event.begin:event.end])),
-     'y': serie[event.begin:event.end].values,
-     'model': [
-        {'type': 'GaussianModel'},
-        {'type': 'GaussianModel'},
-        {'type': 'GaussianModel'},
-        {'type': 'GaussianModel'},
-        {'type': 'GaussianModel'}
-     ]
-    }
-    model, params = _generate_model(spec)
-    output = model.fit(spec['y'], params, x=spec['time'])
-    fitted_integral = output.best_fit
-    pos = find_peaks(fitted_integral)[0]
-    width = peak_widths(fitted_integral, pos)
+def get_catevents():
+    
+    # load ICME catalog data
+    [ic,header,parameters] = pickle.load(open('data/HELCATS_ICMECAT_v20_pandas.p', "rb" ))
+    # extract important values
+    isc = ic.loc[:,'sc_insitu'] 
+    starttime = ic.loc[:,'icme_start_time']
+    endtime = ic.loc[:,'mo_end_time']
+    # Event indices
+    iwinind = np.where(isc == 'Wind')[0]
+    istaind = np.where(isc == 'STEREO-A')[0]
+    istbind = np.where(isc == 'STEREO-B')[0]
 
-    ref_index = serie[event.begin:event.end].index
-    clouds = [evt.Event(ref_index[int(width[2][x])], ref_index[int(width[3][x])]) for x in np.arange(0, len(width[0]))]
-    return clouds
-#    try:
-#        model, params = _generate_model(spec)
-#        output = model.fit(spec['y'], params, x=spec['time'])
-#        fitted_integral = output.best_fit
-#        pos = find_peaks(fitted_integral)[0]
-#        width = peak_widths(fitted_integral, pos)
-#
-#        ref_index = serie[event.begin:event.end].index
-#        clouds = [evt.Event(ref_index[int(width[2][x])], ref_index[int(width[3][x])]) for x in np.arange(0, len(width[0]))]
-#        return clouds
-#    except:
-#        return []
+    winbegin = starttime[iwinind]
+    winend = endtime[iwinind]
 
+    stabegin = starttime[istaind]
+    staend = endtime[istaind]
 
-def _generate_model(spec):
-    composite_model = None
-    params = None
-    x = spec['time']
-    y = spec['y']
-    x_min = np.min(x)
-    x_max = np.max(x)
-    x_range = x_max - x_min
-    y_max = np.max(y)
-    for i, basis_func in enumerate(spec['model']):
-        prefix = f'm{i}_'
-        model = getattr(models, basis_func['type'])(prefix=prefix)
-        if basis_func['type'] in ['GaussianModel', 'LorentzianModel', 'VoigtModel']: # for now VoigtModel has gamma constrained to sigma
-            model.set_param_hint('sigma', min=1e-6, max=x_range)
-            model.set_param_hint('center', min=x_min, max=x_max)
-            model.set_param_hint('height', min=1e-6, max=1.1*y_max)
-            model.set_param_hint('amplitude', min=1e-6)
-            default_params = {
-                prefix+'center': x_min + x_range * random.random(),
-                prefix+'height': y_max * random.random(),
-                prefix+'sigma': x_range * random.random()
-            }
+    stbbegin = starttime[istbind]
+    stbend = endtime[istbind]
+
+    # get list of events
+
+    evtListw = evt.read_cat(winbegin, winend, iwinind)
+    evtLista = evt.read_cat(stabegin, staend, istaind)
+    evtListb = evt.read_cat(stbbegin, stbend, istbind)
+    
+    return evtListw, evtLista, evtListb    
+    
+def generate_result(test_image_paths, test_mask_paths, model):
+    ## Generating the result
+    image_size = (1024,1,10)
+    for i, path in tqdm(enumerate(test_image_paths), total=len(test_image_paths)):
+    
+        df_mask = pds.read_csv(test_mask_paths[i],header = None,index_col=[0])
+        image = parse_image(test_image_paths[i], image_size)
+        predict_mask = model.predict(np.expand_dims(image, axis=0))[0]
+        df_mask['pred'] = np.squeeze(predict_mask)
+        df_mask.columns = ['true', 'pred']
+        if i == 0:
+            result = df_mask
         else:
-            raise NotImplemented(f'model {basis_func["type"]} not implemented yet')
-        if 'help' in basis_func:  # allow override of settings in parameter
-            for param, options in basis_func['help'].items():
-                model.set_param_hint(param, **options)
-        model_params = model.make_params(**default_params, **basis_func.get('params', {}))
-    return model, model_params
+            result = pds.concat([result, df_mask], sort=True)
 
+    result = result.sort_index()
+    result.index = pds.to_datetime(result.index)
+    
+    return result
 
-
-def removeCreepy(eventList, thres=0.5):
+def removeCreepy(eventList, thres=2):
     '''
     For a given list, remove the element whose duration is under the threshold
     '''
     return [x for x in eventList if x.duration > datetime.timedelta(hours=thres)]
 
-
-def turn_peaks_to_clouds(serie, thres, freq=10,
-                         durationOfCreepies=0.5, n_jobs=1):
-    '''
-    Transforms the output serie of a pipeline into a complete list of events
-    '''
-    events = []
-    pred = pds.Series(index=pds.date_range(serie.index[0],
-                                           serie.index[-1],
-                                           freq=(str(freq)+'T')),
-                      data=np.nan)
-
-    pred[serie.index[serie > thres]] = 1
-    pred[serie.index[serie < thres]] = 0
-
-    pred = pred.interpolate()
+def make_binary(serie, thresh):
     
-    intervals = makeEventList(pred, 1, freq)
-    intervals = removeCreepy(intervals, durationOfCreepies)
+    serie = (serie > thresh)*1
+    serie = serie.interpolate()
     
-    results = Parallel(n_jobs=n_jobs)(delayed(_turn_intervals_to_Event)(event, serie) for event in intervals)
-    
-    for fls in results:
-        events.extend(fls)
-    return events, pred
+    return serie
 
 def makeEventList(y, label, delta=2):
     '''
@@ -134,11 +98,14 @@ def makeEventList(y, label, delta=2):
     return eventList
 
 def get_truelabel(data,events):
-    x = data.index
+    
+    x = pds.to_datetime(data.index)
     y = np.zeros(np.shape(data)[0])
+    
     for e in events:
         n_true = np.where((x >= e.begin) & (x <= e.end))
         y[n_true] = 1
     
-    return y
-   
+    label = pds.DataFrame(y, index = data.index, columns = ['label'])
+    
+    return label
